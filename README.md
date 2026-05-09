@@ -1,20 +1,53 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Saffron & Sage
 
-# Run and deploy your AI Studio app
+A recipe for a delicious future.
 
-This contains everything you need to run your app locally.
+Your intelligent YouTube sous-chef. Sync recipes with video, manage your pantry, and plan meals with AI-driven insights.
 
-View your app in AI Studio: https://ai.studio/apps/86db057d-0b5b-459e-9baf-6eff36038f24
+## Stack
 
-## Run Locally
+- React 19 + TypeScript + Vite 6
+- Tailwind CSS v4
+- Supabase (auth + Postgres)
+- YouTube Data API v3
+- Motion (Framer Motion), lucide-react
 
-**Prerequisites:**  Node.js
+## Run locally
 
+**Prerequisites:** Node.js 20+
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```
+   npm install
+   ```
+
+2. Copy `.env.example` to `.env.local` and fill in:
+   ```
+   VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+   VITE_SUPABASE_ANON_KEY=<your-anon-or-publishable-key>
+   VITE_YOUTUBE_API_KEY=<your-youtube-data-api-key>
+   ```
+
+3. Start the dev server:
+   ```
+   npm run dev
+   ```
+
+   App runs on http://localhost:3000
+
+### Windows note
+
+If the project folder name contains `&`, npm scripts can fail because `cmd.exe` treats `&` as a command separator. Switch the script shell to PowerShell:
+
+```
+npm config set script-shell "powershell.exe"
+```
+
+## Supabase setup
+
+The app expects two tables in your Supabase project:
+
+- `pantry` — pantry items per user
+- `meal_plan` — recipes added to the user's planner
+
+Both should have a `user_id` column wired to `auth.users.id` with row-level security policies restricting access to the row owner.
