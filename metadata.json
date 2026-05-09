@@ -1,0 +1,6 @@
+{
+  "name": "Saffron & Sage",
+  "description": "Your Intelligent YouTube Sous-Chef. Sync recipes with video, manage your pantry, and plan meals with AI-driven insights.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
