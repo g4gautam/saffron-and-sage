@@ -31,6 +31,112 @@ import { supabase } from './lib/supabase';
 import { AuthScreen } from './components/AuthScreen';
 import { Session } from '@supabase/supabase-js';
 import { YouTubePlayer } from './components/YouTubePlayer';
+import {
+  searchVideos,
+  isYoutubeConfigured,
+  YoutubeSearchResult,
+} from './services/youtubeService';
+
+const FEED_PILLS = ['For You', 'Quick 15-min', 'Baking', 'Vegetarian', 'Gluten Free'] as const;
+type FeedPill = typeof FEED_PILLS[number];
+
+const PILL_QUERY: Record<FeedPill, string> = {
+  'For You': '',
+  'Quick 15-min': '15 minute',
+  'Baking': 'baking',
+  'Vegetarian': 'vegetarian',
+  'Gluten Free': 'gluten free',
+};
+
+const buildSearchQuery = (search: string, pill: FeedPill): string => {
+  const base = search.trim();
+  const pillTerm = PILL_QUERY[pill];
+  if (!base && !pillTerm) return '';
+  const combined = [base, pillTerm].filter(Boolean).join(' ');
+  return /recipe|cooking|cook/i.test(combined) ? combined : `${combined} recipe`;
+};
+
+const youtubeResultToRecipe = (r: YoutubeSearchResult): Recipe => ({
+  id: `yt-${r.videoId}`,
+  title: r.title,
+  description: r.description,
+  imageUrl: r.thumbnail,
+  time: '—',
+  calories: '—',
+  level: 'Easy',
+  tags: r.channelTitle ? [r.channelTitle.toUpperCase()] : [],
+  ingredients: [],
+  steps: [],
+  youtubeVideoId: r.videoId,
+});
+
+interface MealPlanEntry {
+  id: string;
+  recipe_id: string;
+  recipe_name: string | null;
+  recipe_thumbnail: string | null;
+  scheduled_date: string | null;
+  meal_type: 'BREAKFAST' | 'LUNCH' | 'DINNER' | null;
+  is_leftover: boolean | null;
+}
+
+interface FavoriteEntry {
+  video_id: string;
+  title: string | null;
+  thumbnail: string | null;
+  channel_title: string | null;
+}
+
+const isoDate = (offset = 0): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const rollingDays = (count: number) => {
+  const weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  return Array.from({ length: count }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    return {
+      iso: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+      weekday: weekdays[d.getDay()],
+      day: d.getDate(),
+    };
+  });
+};
+
+const favoriteToRecipe = (f: FavoriteEntry): Recipe => ({
+  id: `yt-${f.video_id}`,
+  title: f.title ?? '',
+  description: '',
+  imageUrl: f.thumbnail ?? '',
+  time: '—',
+  calories: '—',
+  level: 'Easy',
+  tags: f.channel_title ? [f.channel_title.toUpperCase()] : [],
+  ingredients: [],
+  steps: [],
+  youtubeVideoId: f.video_id,
+});
+
+const mealEntryToRecipe = (m: MealPlanEntry): Recipe => {
+  const local = RECIPES.find(r => r.id === m.recipe_id);
+  if (local) return local;
+  return {
+    id: m.recipe_id,
+    title: m.recipe_name ?? 'Untitled',
+    description: '',
+    imageUrl: m.recipe_thumbnail ?? '',
+    time: '—',
+    calories: '—',
+    level: 'Easy',
+    tags: [],
+    ingredients: [],
+    steps: [],
+    youtubeVideoId: m.recipe_id.startsWith('yt-') ? m.recipe_id.slice(3) : undefined,
+  };
+};
 
 // --- Components ---
 // ... (rest of the components stay the same until Main App part)
@@ -103,27 +209,89 @@ const TopBar = ({ title, showBack, onBack, onLogout }: { title: string, showBack
 
 // --- Screens ---
 
-const FeedScreen = ({ onSelectRecipe, onNavigate }: { onSelectRecipe: (r: Recipe) => void, onNavigate: (t: string) => void }) => {
+const FeedScreen = ({ onSelectRecipe, onNavigate, favoriteIds, onToggleFavorite }: {
+  onSelectRecipe: (r: Recipe) => void,
+  onNavigate: (t: string) => void,
+  favoriteIds: Set<string>,
+  onToggleFavorite: (entry: { videoId: string; title: string; thumbnail: string; channelTitle: string }) => void,
+}) => {
+  const [search, setSearch] = useState('');
+  const [pill, setPill] = useState<FeedPill>('For You');
+  const [results, setResults] = useState<YoutubeSearchResult[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const q = buildSearchQuery(search, pill);
+    if (!q) {
+      setResults(null);
+      setSearchLoading(false);
+      setSearchError(null);
+      return;
+    }
+    if (!isYoutubeConfigured()) {
+      setResults([]);
+      setSearchLoading(false);
+      setSearchError('YouTube search needs VITE_YOUTUBE_API_KEY in your environment.');
+      return;
+    }
+    setSearchLoading(true);
+    setSearchError(null);
+    const ctrl = new AbortController();
+    const handle = setTimeout(async () => {
+      try {
+        const res = await searchVideos(q, ctrl.signal);
+        if (ctrl.signal.aborted) return;
+        setResults(res);
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+        console.error(err);
+        setSearchError('Could not load YouTube results. Please try again.');
+        setResults([]);
+      } finally {
+        if (!ctrl.signal.aborted) setSearchLoading(false);
+      }
+    }, 400);
+    return () => {
+      clearTimeout(handle);
+      ctrl.abort();
+    };
+  }, [search, pill]);
+
+  const showResults = results !== null || searchLoading || !!searchError;
+
   return (
     <div className="pt-20 pb-28 px-6 space-y-8 max-w-2xl mx-auto">
       {/* Search Header */}
       <div className="relative">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-        <input 
-          type="text" 
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
           placeholder="Search trending recipes..."
-          className="w-full bg-white border-2 border-sage/10 focus:border-sage h-14 pl-12 pr-6 rounded-2xl outline-none transition-all shadow-sm shadow-sage/5"
+          className="w-full bg-white border-2 border-sage/10 focus:border-sage h-14 pl-12 pr-12 rounded-2xl outline-none transition-all shadow-sm shadow-sage/5"
         />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            aria-label="Clear search"
+            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
       {/* Category Pills */}
       <div className="flex gap-3 overflow-x-auto no-scrollbar -mx-6 px-6">
-        {['For You', 'Quick 15-min', 'Baking', 'Vegetarian', 'Gluten Free'].map((cat, i) => (
-          <button 
+        {FEED_PILLS.map((cat) => (
+          <button
             key={cat}
+            onClick={() => setPill(cat)}
             className={cn(
               "whitespace-nowrap px-6 py-2.5 rounded-full font-bold text-xs uppercase tracking-wider transition-all",
-              i === 0 ? "bg-sage text-white shadow-md shadow-sage/20" : "bg-white border border-sage/10 text-slate-500 hover:bg-sage/5"
+              pill === cat ? "bg-sage text-white shadow-md shadow-sage/20" : "bg-white border border-sage/10 text-slate-500 hover:bg-sage/5"
             )}
           >
             {cat}
@@ -131,6 +299,57 @@ const FeedScreen = ({ onSelectRecipe, onNavigate }: { onSelectRecipe: (r: Recipe
         ))}
       </div>
 
+      {showResults ? (
+        searchLoading ? (
+          <div className="p-12 bg-white rounded-3xl border-2 border-dashed border-sage/20 flex flex-col items-center justify-center gap-4">
+            <div className="w-10 h-10 border-4 border-sage border-t-transparent rounded-full animate-spin" />
+            <p className="font-bold text-slate-400 text-[10px] uppercase tracking-[0.2em]">Searching YouTube...</p>
+          </div>
+        ) : searchError ? (
+          <div className="p-12 bg-red-50 rounded-3xl border border-red-100 flex flex-col items-center justify-center gap-3 text-center">
+            <Info className="text-red-400" size={32} />
+            <p className="text-red-900 font-bold">Search Failed</p>
+            <p className="text-red-600/70 text-xs max-w-sm">{searchError}</p>
+          </div>
+        ) : results && results.length === 0 ? (
+          <div className="p-12 bg-white rounded-3xl border-2 border-dashed border-sage/20 flex flex-col items-center justify-center gap-3 text-center">
+            <Search className="text-slate-300" size={32} />
+            <p className="font-bold text-slate-500">No videos found</p>
+            <p className="text-slate-400 text-xs">Try a different search or category.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            {results!.map((r) => {
+              const isFav = favoriteIds.has(r.videoId);
+              return (
+                <motion.article
+                  key={r.videoId}
+                  onClick={() => onSelectRecipe(youtubeResultToRecipe(r))}
+                  className="relative h-64 rounded-3xl overflow-hidden shadow-lg group cursor-pointer bg-slate-900"
+                  whileTap={{ scale: 0.96 }}
+                >
+                  <img src={r.thumbnail} alt={r.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleFavorite({ videoId: r.videoId, title: r.title, thumbnail: r.thumbnail, channelTitle: r.channelTitle });
+                    }}
+                    aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                    className="absolute top-3 right-3 p-2 bg-white/20 backdrop-blur-md rounded-full transition-colors"
+                  >
+                    <Heart size={18} fill={isFav ? 'currentColor' : 'none'} className={isFav ? 'text-red-400' : 'text-white'} />
+                  </button>
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-4 pointer-events-none">
+                    <h3 className="font-display text-white font-bold leading-tight mb-1 line-clamp-2">{r.title}</h3>
+                    <p className="text-white/70 text-[10px] font-bold uppercase tracking-wider truncate">{r.channelTitle}</p>
+                  </div>
+                </motion.article>
+              );
+            })}
+          </div>
+        )
+      ) : (
+      <>
       {/* Bento Grid Discovery */}
       <div className="grid grid-cols-2 gap-4">
         {/* Large Trending Card */}
@@ -193,12 +412,27 @@ const FeedScreen = ({ onSelectRecipe, onNavigate }: { onSelectRecipe: (r: Recipe
             >
               <div className="relative aspect-video overflow-hidden">
                 <img src={recipe.imageUrl} alt={recipe.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                <button 
-                  onClick={(e) => { e.stopPropagation(); /* Toggle Favorite */ }}
-                  className="absolute top-3 right-3 p-2 bg-white/20 backdrop-blur-md rounded-full text-white hover:text-red-400 transition-colors"
-                >
-                  <Heart size={18} />
-                </button>
+                {recipe.youtubeVideoId && (() => {
+                  const vid = recipe.youtubeVideoId;
+                  const isFav = favoriteIds.has(vid);
+                  return (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleFavorite({
+                          videoId: vid,
+                          title: recipe.title,
+                          thumbnail: recipe.imageUrl,
+                          channelTitle: recipe.tags[0] ?? '',
+                        });
+                      }}
+                      aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                      className="absolute top-3 right-3 p-2 bg-white/20 backdrop-blur-md rounded-full transition-colors"
+                    >
+                      <Heart size={18} fill={isFav ? 'currentColor' : 'none'} className={isFav ? 'text-red-400' : 'text-white'} />
+                    </button>
+                  );
+                })()}
               </div>
               <div className="p-4">
                 <h4 className="font-bold text-slate-800 leading-tight mb-2">{recipe.title}</h4>
@@ -211,20 +445,27 @@ const FeedScreen = ({ onSelectRecipe, onNavigate }: { onSelectRecipe: (r: Recipe
           ))}
         </div>
       </section>
+      </>
+      )}
     </div>
   );
 };
 
 
-const RecipeDetailScreen = ({ recipe, onBack, onStartCooking, onAddToPlanner, isInPlanner }: { 
-  recipe: Recipe, 
-  onBack: () => void, 
+const RecipeDetailScreen = ({ recipe, onBack, onStartCooking, onAddToPlanner, isInPlanner, favoriteIds, onToggleFavorite }: {
+  recipe: Recipe,
+  onBack: () => void,
   onStartCooking: () => void,
   onAddToPlanner: (r: Recipe) => void,
-  isInPlanner: boolean
+  isInPlanner: boolean,
+  favoriteIds: Set<string>,
+  onToggleFavorite: (entry: { videoId: string; title: string; thumbnail: string; channelTitle: string }) => void,
 }) => {
+  const isYoutubeOnly = recipe.ingredients.length === 0 && recipe.steps.length === 0;
+  const [unitSystem, setUnitSystem] = useState<'metric' | 'imperial'>('metric');
+  const isFav = recipe.youtubeVideoId ? favoriteIds.has(recipe.youtubeVideoId) : false;
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
@@ -258,59 +499,118 @@ const RecipeDetailScreen = ({ recipe, onBack, onStartCooking, onAddToPlanner, is
                 <span key={tag} className="px-3 py-1 bg-sage/10 text-sage-dark rounded-full text-[10px] font-bold uppercase tracking-widest">{tag}</span>
               ))}
             </div>
-            <h1 className="font-display text-4xl font-bold text-slate-900 leading-tight">{recipe.title}</h1>
+            <div className="flex items-start justify-between gap-4">
+              <h1 className="font-display text-4xl font-bold text-slate-900 leading-tight">{recipe.title}</h1>
+              {recipe.youtubeVideoId && (() => {
+                const vid = recipe.youtubeVideoId;
+                return (
+                  <button
+                    onClick={() => onToggleFavorite({
+                      videoId: vid,
+                      title: recipe.title,
+                      thumbnail: recipe.imageUrl,
+                      channelTitle: recipe.tags[0] ?? '',
+                    })}
+                    aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                    className="flex-none p-3 bg-white border border-sage/10 rounded-full shadow-sm hover:border-red-200 transition-colors"
+                  >
+                    <Heart size={22} fill={isFav ? 'currentColor' : 'none'} className={isFav ? 'text-red-500' : 'text-slate-400'} />
+                  </button>
+                );
+              })()}
+            </div>
             <p className="text-slate-500 leading-relaxed max-w-2xl">{recipe.description}</p>
           </div>
 
           <div className="bg-sage/5 rounded-3xl p-6 border border-sage/10 space-y-6 flex flex-col justify-between">
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Time</p>
-                <p className="font-display text-xl font-bold text-slate-800">{recipe.time}</p>
+            {isYoutubeOnly ? (
+              <div className="text-center space-y-1">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">YouTube Video</p>
+                <p className="font-display text-lg font-bold text-slate-800 truncate">{recipe.tags[0] ?? 'Cooking'}</p>
               </div>
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Calories</p>
-                <p className="font-display text-xl font-bold text-slate-800">{recipe.calories.split(' ')[0]}</p>
+            ) : (
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Time</p>
+                  <p className="font-display text-xl font-bold text-slate-800">{recipe.time}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Calories</p>
+                  <p className="font-display text-xl font-bold text-slate-800">{recipe.calories.split(' ')[0]}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Level</p>
+                  <p className="font-display text-xl font-bold text-slate-800">{recipe.level.slice(0, 3)}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Level</p>
-                <p className="font-display text-xl font-bold text-slate-800">{recipe.level.slice(0, 3)}</p>
-              </div>
-            </div>
-            <button 
-              onClick={onStartCooking}
-              className="w-full bg-saffron text-white py-4 rounded-2xl font-bold tracking-tight shadow-lg shadow-saffron/20 active:scale-95 transition-all"
-            >
-              Start Cooking Mode
-            </button>
+            )}
+            {recipe.steps.length > 0 ? (
+              <button
+                onClick={onStartCooking}
+                className="w-full bg-saffron text-white py-4 rounded-2xl font-bold tracking-tight shadow-lg shadow-saffron/20 active:scale-95 transition-all"
+              >
+                Start Cooking Mode
+              </button>
+            ) : recipe.youtubeVideoId ? (
+              <a
+                href={`https://www.youtube.com/watch?v=${recipe.youtubeVideoId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full bg-saffron text-white py-4 rounded-2xl font-bold tracking-tight shadow-lg shadow-saffron/20 active:scale-95 transition-all text-center block"
+              >
+                Watch on YouTube
+              </a>
+            ) : null}
           </div>
         </div>
 
         {/* Ingredients */}
+        {recipe.ingredients.length > 0 && (
         <section className="bg-white rounded-3xl p-8 border border-sage/10 shadow-sm space-y-6">
           <div className="flex justify-between items-end">
             <h3 className="font-display text-2xl font-bold text-slate-900">Ingredients</h3>
             <div className="flex bg-cream p-1 rounded-xl">
-              <button className="px-4 py-1.5 bg-white shadow-sm rounded-lg text-xs font-bold text-saffron uppercase">Metric</button>
-              <button className="px-4 py-1.5 text-xs font-bold text-slate-400 uppercase">Imperial</button>
+              <button
+                onClick={() => setUnitSystem('metric')}
+                className={cn(
+                  "px-4 py-1.5 rounded-lg text-xs font-bold uppercase transition-all",
+                  unitSystem === 'metric' ? "bg-white shadow-sm text-saffron" : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                Metric
+              </button>
+              <button
+                onClick={() => setUnitSystem('imperial')}
+                className={cn(
+                  "px-4 py-1.5 rounded-lg text-xs font-bold uppercase transition-all",
+                  unitSystem === 'imperial' ? "bg-white shadow-sm text-saffron" : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                Imperial
+              </button>
             </div>
           </div>
-          
+
           <ul className="space-y-4">
-            {recipe.ingredients.map(ing => (
-              <li key={ing.id} className="flex items-center gap-4 group">
-                <button className={cn(
-                  "w-6 h-6 rounded-lg border-2 border-sage flex items-center justify-center transition-all",
-                  ing.inStock ? "bg-sage text-white" : "hover:bg-sage/5"
-                )}>
-                  {ing.inStock && <Check size={16} strokeWidth={3} />}
-                </button>
-                <div className="flex-1 flex justify-between items-center border-b border-sage/5 pb-2">
-                  <span className="text-slate-700 font-medium">{ing.name}</span>
-                  <span className="text-slate-400 font-bold text-sm tracking-tight">{ing.amount}</span>
-                </div>
-              </li>
-            ))}
+            {recipe.ingredients.map(ing => {
+              const displayAmount = unitSystem === 'metric'
+                ? (ing.amountMetric ?? ing.amount)
+                : (ing.amountImperial ?? ing.amount);
+              return (
+                <li key={ing.id} className="flex items-center gap-4 group">
+                  <button className={cn(
+                    "w-6 h-6 rounded-lg border-2 border-sage flex items-center justify-center transition-all",
+                    ing.inStock ? "bg-sage text-white" : "hover:bg-sage/5"
+                  )}>
+                    {ing.inStock && <Check size={16} strokeWidth={3} />}
+                  </button>
+                  <div className="flex-1 flex justify-between items-center border-b border-sage/5 pb-2">
+                    <span className="text-slate-700 font-medium">{ing.name}</span>
+                    <span className="text-slate-400 font-bold text-sm tracking-tight">{displayAmount}</span>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
 
           <button 
@@ -327,6 +627,7 @@ const RecipeDetailScreen = ({ recipe, onBack, onStartCooking, onAddToPlanner, is
             {isInPlanner ? 'Already in Planner' : 'Add Missing to Grocery List'}
           </button>
         </section>
+        )}
       </div>
     </motion.div>
   );
@@ -455,7 +756,13 @@ const SmartCookScreen = ({ recipe, onExit, onComplete }: { recipe: Recipe, onExi
   );
 };
 
-const PantryScreen = ({ items, onUpdateLevel }: { items: PantryItem[], onUpdateLevel: (id: string, level: PantryItem['level']) => void }) => {
+const PantryScreen = ({ items, onUpdateLevel, onSetActive, onRemove }: {
+  items: PantryItem[],
+  onUpdateLevel: (id: string, level: PantryItem['level']) => void,
+  onSetActive: (id: string, active: boolean) => void,
+  onRemove: (id: string) => void,
+}) => {
+  const [editMode, setEditMode] = useState(false);
   return (
     <div className="pt-20 pb-28 px-6 space-y-8 max-w-2xl mx-auto">
       <header>
@@ -469,7 +776,12 @@ const PantryScreen = ({ items, onUpdateLevel }: { items: PantryItem[], onUpdateL
             <UtensilsCrossed className="text-sage" />
             <h3 className="font-display text-xl font-bold text-slate-800">Essential Staples</h3>
           </div>
-          <button className="text-saffron font-bold text-xs uppercase tracking-widest">Edit List</button>
+          <button
+            onClick={() => setEditMode(e => !e)}
+            className="text-saffron font-bold text-xs uppercase tracking-widest"
+          >
+            {editMode ? 'Done' : 'Edit List'}
+          </button>
         </div>
 
         <div className="space-y-4">
@@ -494,10 +806,18 @@ const PantryScreen = ({ items, onUpdateLevel }: { items: PantryItem[], onUpdateL
                     <p className="text-[10px] font-medium text-slate-400 mt-1">{item.quantity}{item.unit} available</p>
                   </div>
                 </div>
-                {item.active ? (
+                {editMode ? (
+                  <button
+                    onClick={() => onRemove(item.id)}
+                    aria-label={`Remove ${item.name}`}
+                    className="p-2 text-slate-300 hover:text-red-500 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                ) : item.active ? (
                   <div className="flex gap-1 bg-cream/30 p-1 rounded-xl">
                     {(['Low', 'Half', 'Full'] as const).map(l => (
-                      <button 
+                      <button
                         key={l}
                         onClick={() => onUpdateLevel(item.id, l)}
                         className={cn(
@@ -512,7 +832,12 @@ const PantryScreen = ({ items, onUpdateLevel }: { items: PantryItem[], onUpdateL
                     ))}
                   </div>
                 ) : (
-                  <button className="px-4 py-2 bg-saffron/20 text-saffron-800 rounded-xl text-xs font-bold uppercase tracking-widest">Activate</button>
+                  <button
+                    onClick={() => onSetActive(item.id, true)}
+                    className="px-4 py-2 bg-saffron/20 text-saffron-800 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-saffron/30 transition-colors"
+                  >
+                    Activate
+                  </button>
                 )}
               </div>
             </div>
@@ -533,41 +858,45 @@ const PantryScreen = ({ items, onUpdateLevel }: { items: PantryItem[], onUpdateL
   );
 };
 
-const CookbookScreen = ({ onSelectRecipe, onNavigate }: { onSelectRecipe: (r: Recipe) => void, onNavigate: (t: string) => void }) => {
+const CookbookScreen = ({ onSelectRecipe, favorites }: { onSelectRecipe: (r: Recipe) => void, favorites: FavoriteEntry[] }) => {
   return (
     <div className="pt-20 pb-28 px-6 space-y-8 max-w-2xl mx-auto">
       <header className="flex justify-between items-end">
         <div>
-          <h2 className="font-display text-4xl font-bold text-saffron-900">Your Collections</h2>
-          <p className="text-slate-500">Access your saved culinary treasures.</p>
+          <h2 className="font-display text-4xl font-bold text-saffron-900">Saved Favorites</h2>
+          <p className="text-slate-500">Cooking videos you've hearted from the feed.</p>
         </div>
-        <button 
-          onClick={() => onNavigate('feed')}
-          className="text-saffron font-bold text-xs flex items-center gap-1 uppercase tracking-widest"
-        >
-          View All <ChevronRight size={16} />
-        </button>
+        <span className="text-saffron font-bold text-xs uppercase tracking-widest">{favorites.length} SAVED</span>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {[
-          { title: "Weeknight Dinners", count: 12, img: "https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&q=80&w=400" },
-          { title: "Healthy Starts", count: 8, img: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&q=80&w=400" },
-          { title: "Holiday Baking", count: 24, img: "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&q=80&w=400" }
-        ].map((col, i) => (
-          <motion.div 
-            key={i}
-            className="group relative aspect-[4/3] rounded-3xl overflow-hidden cursor-pointer shadow-lg hover:shadow-xl transition-all"
-            whileTap={{ scale: 0.98 }}
-          >
-            <img src={col.img} alt={col.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
-            <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-slate-900/20 to-transparent flex flex-col justify-end p-6">
-              <h3 className="font-display text-2xl font-bold text-white">{col.title}</h3>
-              <p className="text-white/60 text-[10px] font-bold uppercase tracking-widest mt-1">{col.count} SAVED VIDEOS</p>
-            </div>
-          </motion.div>
-        ))}
-      </div>
+      {favorites.length === 0 ? (
+        <div className="p-12 bg-white rounded-3xl border-2 border-dashed border-sage/20 flex flex-col items-center justify-center gap-3 text-center">
+          <Heart size={32} className="text-slate-300" />
+          <p className="font-bold text-slate-500">No favorites yet</p>
+          <p className="text-slate-400 text-xs">Tap the heart on any video in the feed to save it here.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {favorites.map(fav => (
+            <motion.div
+              key={fav.video_id}
+              onClick={() => onSelectRecipe(favoriteToRecipe(fav))}
+              className="group relative aspect-[4/3] rounded-3xl overflow-hidden cursor-pointer shadow-lg hover:shadow-xl transition-all bg-slate-900"
+              whileTap={{ scale: 0.98 }}
+            >
+              {fav.thumbnail && (
+                <img src={fav.thumbnail} alt={fav.title ?? ''} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/90 via-slate-900/30 to-transparent flex flex-col justify-end p-6">
+                <h3 className="font-display text-xl font-bold text-white line-clamp-2">{fav.title ?? 'Untitled video'}</h3>
+                {fav.channel_title && (
+                  <p className="text-white/60 text-[10px] font-bold uppercase tracking-widest mt-1 truncate">{fav.channel_title}</p>
+                )}
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
 
       <section className="space-y-4">
         <h3 className="font-display text-2xl font-bold text-slate-800">Quick Access Recipes</h3>
@@ -592,23 +921,31 @@ const CookbookScreen = ({ onSelectRecipe, onNavigate }: { onSelectRecipe: (r: Re
   );
 };
 
-const MealPlannerScreen = ({ mealPlan, onNavigate, onRemove }: { mealPlan: Recipe[], onNavigate: (t: string) => void, onRemove: (id: string) => void }) => {
+const MealPlannerScreen = ({ mealPlan, onNavigate, onRemove }: { mealPlan: MealPlanEntry[], onNavigate: (t: string) => void, onRemove: (entryId: string) => void }) => {
+  const days = useMemo(() => rollingDays(7), []);
+  const [selectedIso, setSelectedIso] = useState(days[0].iso);
+  const mealsForDay = mealPlan.filter(m => m.scheduled_date === selectedIso);
+
   return (
     <div className="pt-20 pb-28 px-6 space-y-8 max-w-2xl mx-auto">
       <div className="flex gap-3 overflow-x-auto no-scrollbar -mx-6 px-6">
-        {['MON 12', 'TUE 13', 'WED 14', 'THU 15', 'FRI 16'].map((day, i) => (
-          <button 
-            key={day}
-            className={cn(
-              "flex flex-col items-center gap-1 min-w-[70px] py-4 rounded-2xl font-bold transition-all",
-              i === 0 ? "bg-sage text-white shadow-lg shadow-sage/20 scale-105" : "bg-white text-slate-400"
-            )}
-          >
-            <span className="text-[10px] uppercase tracking-widest">{day.split(' ')[0]}</span>
-            <span className="text-2xl">{day.split(' ')[1]}</span>
-            {i === 0 && <div className="w-1 h-1 bg-white rounded-full mt-1" />}
-          </button>
-        ))}
+        {days.map((d) => {
+          const isActive = d.iso === selectedIso;
+          return (
+            <button
+              key={d.iso}
+              onClick={() => setSelectedIso(d.iso)}
+              className={cn(
+                "flex flex-col items-center gap-1 min-w-[70px] py-4 rounded-2xl font-bold transition-all",
+                isActive ? "bg-sage text-white shadow-lg shadow-sage/20 scale-105" : "bg-white text-slate-400 hover:text-slate-600"
+              )}
+            >
+              <span className="text-[10px] uppercase tracking-widest">{d.weekday}</span>
+              <span className="text-2xl">{d.day}</span>
+              {isActive && <div className="w-1 h-1 bg-white rounded-full mt-1" />}
+            </button>
+          );
+        })}
       </div>
 
       <div className="bg-white rounded-3xl p-6 border border-sage/10 shadow-sm space-y-6">
@@ -631,52 +968,51 @@ const MealPlannerScreen = ({ mealPlan, onNavigate, onRemove }: { mealPlan: Recip
       </div>
 
       <div className="space-y-6">
-        {['BREAKFAST', 'LUNCH', 'DINNER'].map(meal => (
-          <div key={meal} className="space-y-3">
-            <div className="flex items-center gap-2 text-saffron">
-              <Flame size={18} />
-              <h4 className="font-bold uppercase text-xs tracking-widest">{meal}</h4>
-            </div>
-            {meal === 'DINNER' && mealPlan.length > 0 ? (
-              <div className="bg-white rounded-3xl overflow-hidden shadow-md flex gap-4 p-4 border border-sage/5 group relative">
-                <button 
-                  onClick={() => onRemove(mealPlan[0].id)}
-                  className="absolute top-4 right-4 p-1 text-slate-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all z-10"
-                >
-                  <X size={16} />
-                </button>
-                <div className="w-28 h-28 rounded-2xl overflow-hidden shadow-sm flex-none">
-                  <img src={mealPlan[0].imageUrl} alt={mealPlan[0].title} className="w-full h-full object-cover" />
-                </div>
-                <div className="flex flex-col justify-center flex-1 space-y-2">
-                  <h5 className="font-bold text-slate-800 leading-tight">{mealPlan[0].title}</h5>
-                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">{mealPlan[0].time} • {mealPlan[0].level}</p>
-                  <button className="w-fit flex items-center gap-1.5 px-3 py-1 bg-sage/10 text-sage rounded-full text-[10px] font-bold uppercase tracking-widest">
-                    <Flame size={12} /> Cook once, eat twice
-                  </button>
-                </div>
+        {(['BREAKFAST', 'LUNCH', 'DINNER'] as const).map(meal => {
+          const entries = mealsForDay.filter(m => m.meal_type === meal);
+          return (
+            <div key={meal} className="space-y-3">
+              <div className="flex items-center gap-2 text-saffron">
+                <Flame size={18} />
+                <h4 className="font-bold uppercase text-xs tracking-widest">{meal}</h4>
               </div>
-            ) : (
-              <button 
-                onClick={() => onNavigate('cookbook')}
-                className="w-full h-24 border-2 border-dashed border-sage/20 rounded-3xl flex items-center justify-center gap-2 text-slate-400 hover:text-saffron hover:bg-saffron/5 transition-all group"
-              >
-                <div className="p-2 border-2 border-slate-200 rounded-full group-hover:border-saffron transition-all">
-                  <X className="rotate-45" size={16} />
-                </div>
-                <span className="font-bold text-sm">Quick Add from Cookbook</span>
-              </button>
-            )}
-          </div>
-        ))}
-        {mealPlan.length === 0 && (
-          <div 
-            onClick={() => onNavigate('feed')}
-            className="p-12 text-center text-slate-400 border-2 border-dashed border-sage/20 rounded-3xl cursor-pointer hover:bg-sage/5 transition-colors"
-          >
-            No meals planned. Add some from the feed!
-          </div>
-        )}
+              {entries.length > 0 ? (
+                entries.map(entry => (
+                  <div key={entry.id} className="bg-white rounded-3xl overflow-hidden shadow-md flex gap-4 p-4 border border-sage/5 group relative">
+                    <button
+                      onClick={() => onRemove(entry.id)}
+                      className="absolute top-4 right-4 p-1 text-slate-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all z-10"
+                      aria-label="Remove from planner"
+                    >
+                      <X size={16} />
+                    </button>
+                    <div className="w-28 h-28 rounded-2xl overflow-hidden shadow-sm flex-none bg-slate-100">
+                      {entry.recipe_thumbnail && (
+                        <img src={entry.recipe_thumbnail} alt={entry.recipe_name ?? ''} className="w-full h-full object-cover" />
+                      )}
+                    </div>
+                    <div className="flex flex-col justify-center flex-1 space-y-2">
+                      <h5 className="font-bold text-slate-800 leading-tight">{entry.recipe_name ?? 'Untitled recipe'}</h5>
+                      <span className="w-fit flex items-center gap-1.5 px-3 py-1 bg-sage/10 text-sage rounded-full text-[10px] font-bold uppercase tracking-widest">
+                        <Flame size={12} /> Cook once, eat twice
+                      </span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <button
+                  onClick={() => onNavigate('cookbook')}
+                  className="w-full h-24 border-2 border-dashed border-sage/20 rounded-3xl flex items-center justify-center gap-2 text-slate-400 hover:text-saffron hover:bg-saffron/5 transition-all group"
+                >
+                  <div className="p-2 border-2 border-slate-200 rounded-full group-hover:border-saffron transition-all">
+                    <X className="rotate-45" size={16} />
+                  </div>
+                  <span className="font-bold text-sm">Quick Add from Cookbook</span>
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="bg-slate-900 rounded-3xl p-8 text-white space-y-6 relative overflow-hidden">
@@ -716,6 +1052,7 @@ const MealPlannerScreen = ({ mealPlan, onNavigate, onRemove }: { mealPlan: Recip
 const CheckoutScreen = ({ items }: { items: any[] }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [orderState, setOrderState] = useState<'idle' | 'placing' | 'placed'>('idle');
 
   return (
     <div className="pt-20 pb-28 px-6 space-y-8 max-w-2xl mx-auto">
@@ -820,10 +1157,40 @@ const CheckoutScreen = ({ items }: { items: any[] }) => {
       </section>
 
       <div className="bg-sage/10 p-8 rounded-[40px] space-y-6">
-        <button className="w-full h-16 bg-saffron text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-3 shadow-xl shadow-saffron/20 active:scale-95 transition-all">
-          Place Order with BigBasket
-          <ShoppingCart size={24} />
+        <button
+          onClick={() => {
+            if (orderState !== 'idle') return;
+            setOrderState('placing');
+            setTimeout(() => setOrderState('placed'), 1200);
+          }}
+          disabled={orderState !== 'idle'}
+          className={cn(
+            "w-full h-16 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all",
+            orderState === 'placed' ? "bg-sage text-white shadow-sage/20" : "bg-saffron text-white shadow-saffron/20 disabled:opacity-80"
+          )}
+        >
+          {orderState === 'placing' ? (
+            <>
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              Placing Order...
+            </>
+          ) : orderState === 'placed' ? (
+            <>
+              <Check size={24} strokeWidth={3} />
+              Order Placed — Delivery by 6:00 PM
+            </>
+          ) : (
+            <>
+              Place Order with BigBasket
+              <ShoppingCart size={24} />
+            </>
+          )}
         </button>
+        {orderState === 'placed' && (
+          <p className="text-center text-xs text-slate-500">
+            This is a simulated order — no real BigBasket request was made.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -861,7 +1228,9 @@ export default function App() {
 
   // Supabase-backed state
   const [pantry, setPantry] = useState<PantryItem[]>(PANTRY_ITEMS);
-  const [mealPlan, setMealPlan] = useState<Recipe[]>([]);
+  const [mealPlan, setMealPlan] = useState<MealPlanEntry[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteEntry[]>([]);
+  const favoriteIds = useMemo(() => new Set(favorites.map(f => f.video_id)), [favorites]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -888,22 +1257,27 @@ export default function App() {
         if (pantryData && pantryData.length > 0) {
           setPantry(pantryData as PantryItem[]);
         } else {
-          // Initialize with defaults if empty
-          const initialPantry = PANTRY_ITEMS.map(item => ({ ...item, user_id: session.user.id }));
-          const { data: inserted } = await supabase.from('pantry').upsert(initialPantry).select();
+          // Initialize with defaults if empty (drop local id so DB generates UUIDs)
+          const initialPantry = PANTRY_ITEMS.map(({ id: _localId, ...item }) => ({ ...item, user_id: session.user.id }));
+          const { data: inserted } = await supabase.from('pantry').insert(initialPantry).select();
           if (inserted) setPantry(inserted as PantryItem[]);
         }
 
         // Fetch Meal Plan
         const { data: mealData } = await supabase
           .from('meal_plan')
-          .select('recipe_id')
+          .select('id, recipe_id, recipe_name, recipe_thumbnail, scheduled_date, meal_type, is_leftover')
           .eq('user_id', session.user.id);
 
-        if (mealData) {
-          const plannedRecipes = RECIPES.filter(r => mealData.some(m => m.recipe_id === r.id));
-          setMealPlan(plannedRecipes);
-        }
+        if (mealData) setMealPlan(mealData as MealPlanEntry[]);
+
+        // Fetch Favorites
+        const { data: favData } = await supabase
+          .from('favorites')
+          .select('video_id, title, thumbnail, channel_title')
+          .eq('user_id', session.user.id);
+
+        if (favData) setFavorites(favData as FavoriteEntry[]);
       };
       fetchUserData();
     }
@@ -924,29 +1298,82 @@ export default function App() {
       .eq('user_id', session.user.id);
   };
 
-  const addRecipeToPlanner = async (recipe: Recipe) => {
+  const addRecipeToPlanner = async (recipe: Recipe, scheduledDate: string = isoDate(0)) => {
     if (!session) return;
-    if (mealPlan.some(r => r.id === recipe.id)) return;
+    if (mealPlan.some(m => m.recipe_id === recipe.id && m.scheduled_date === scheduledDate)) return;
 
-    const newMealPlan = [...mealPlan, recipe];
-    setMealPlan(newMealPlan);
+    const payload = {
+      user_id: session.user.id,
+      recipe_id: recipe.id,
+      recipe_name: recipe.title,
+      recipe_thumbnail: recipe.imageUrl,
+      scheduled_date: scheduledDate,
+      meal_type: 'DINNER' as const,
+    };
 
-    await supabase
+    const { data: inserted } = await supabase
       .from('meal_plan')
-      .insert({ user_id: session.user.id, recipe_id: recipe.id });
+      .insert(payload)
+      .select('id, recipe_id, recipe_name, recipe_thumbnail, scheduled_date, meal_type, is_leftover')
+      .single();
+
+    if (inserted) setMealPlan(m => [...m, inserted as MealPlanEntry]);
   };
 
-  const removeRecipeFromPlanner = async (id: string) => {
+  const removeMealPlanEntry = async (entryId: string) => {
     if (!session) return;
-    if (window.confirm("Remove ingredients for this recipe from your cart as well?")) {
-      const newMealPlan = mealPlan.filter(r => r.id !== id);
-      setMealPlan(newMealPlan);
+    if (!window.confirm("Remove ingredients for this recipe from your cart as well?")) return;
 
+    setMealPlan(m => m.filter(e => e.id !== entryId));
+    await supabase
+      .from('meal_plan')
+      .delete()
+      .eq('id', entryId)
+      .eq('user_id', session.user.id);
+  };
+
+  const setPantryItemActive = async (id: string, active: boolean) => {
+    if (!session) return;
+    setPantry(p => p.map(i => i.id === id ? { ...i, active } : i));
+    await supabase
+      .from('pantry')
+      .update({ active })
+      .eq('id', id)
+      .eq('user_id', session.user.id);
+  };
+
+  const removePantryItem = async (id: string) => {
+    if (!session) return;
+    setPantry(p => p.filter(i => i.id !== id));
+    await supabase
+      .from('pantry')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', session.user.id);
+  };
+
+  const toggleFavorite = async (entry: { videoId: string; title: string; thumbnail: string; channelTitle: string }) => {
+    if (!session) return;
+    const isFav = favoriteIds.has(entry.videoId);
+    if (isFav) {
+      setFavorites(f => f.filter(x => x.video_id !== entry.videoId));
       await supabase
-        .from('meal_plan')
+        .from('favorites')
         .delete()
         .eq('user_id', session.user.id)
-        .eq('recipe_id', id);
+        .eq('video_id', entry.videoId);
+    } else {
+      const row: FavoriteEntry = {
+        video_id: entry.videoId,
+        title: entry.title,
+        thumbnail: entry.thumbnail,
+        channel_title: entry.channelTitle,
+      };
+      setFavorites(f => [...f, row]);
+      await supabase.from('favorites').insert({
+        user_id: session.user.id,
+        ...row,
+      });
     }
   };
 
@@ -987,7 +1414,8 @@ export default function App() {
 
   const cartDeltas = useMemo(() => {
     const deltas: any[] = [];
-    mealPlan.forEach(recipe => {
+    mealPlan.forEach(entry => {
+      const recipe = mealEntryToRecipe(entry);
       recipe.ingredients.forEach(ing => {
         const pantryItem = pantry.find(p => p.name.toLowerCase().includes(ing.name.split(' ')[0].toLowerCase()));
         if (pantryItem) {
@@ -1046,22 +1474,24 @@ export default function App() {
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.3 }}
         >
-          {activeTab === 'feed' && <FeedScreen onSelectRecipe={setSelectedRecipe} onNavigate={setActiveTab} />}
-          {activeTab === 'pantry' && <PantryScreen items={pantry} onUpdateLevel={updatePantryItem} />}
-          {activeTab === 'cookbook' && <CookbookScreen onSelectRecipe={setSelectedRecipe} onNavigate={setActiveTab} />}
-          {activeTab === 'planner' && <MealPlannerScreen mealPlan={mealPlan} onNavigate={setActiveTab} onRemove={removeRecipeFromPlanner} />}
+          {activeTab === 'feed' && <FeedScreen onSelectRecipe={setSelectedRecipe} onNavigate={setActiveTab} favoriteIds={favoriteIds} onToggleFavorite={toggleFavorite} />}
+          {activeTab === 'pantry' && <PantryScreen items={pantry} onUpdateLevel={updatePantryItem} onSetActive={setPantryItemActive} onRemove={removePantryItem} />}
+          {activeTab === 'cookbook' && <CookbookScreen onSelectRecipe={setSelectedRecipe} favorites={favorites} />}
+          {activeTab === 'planner' && <MealPlannerScreen mealPlan={mealPlan} onNavigate={setActiveTab} onRemove={removeMealPlanEntry} />}
           {activeTab === 'cart' && <CheckoutScreen items={cartDeltas} />}
         </motion.div>
       </AnimatePresence>
 
       <AnimatePresence>
         {selectedRecipe && !isCooking && (
-          <RecipeDetailScreen 
-            recipe={selectedRecipe} 
-            onBack={() => setSelectedRecipe(null)} 
+          <RecipeDetailScreen
+            recipe={selectedRecipe}
+            onBack={() => setSelectedRecipe(null)}
             onStartCooking={() => setIsCooking(true)}
-            isInPlanner={mealPlan.some(r => r.id === selectedRecipe.id)}
+            isInPlanner={mealPlan.some(m => m.recipe_id === selectedRecipe.id)}
             onAddToPlanner={addRecipeToPlanner}
+            favoriteIds={favoriteIds}
+            onToggleFavorite={toggleFavorite}
           />
         )}
       </AnimatePresence>

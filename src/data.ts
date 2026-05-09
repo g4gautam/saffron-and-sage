@@ -11,11 +11,11 @@ export const RECIPES: Recipe[] = [
     level: 'Intermediate',
     tags: ['HEALTHY', 'CITRUS'],
     trending: true,
-    youtubeVideoId: 'dQw4w9WgXcQ', // Placeholder
+    youtubeVideoId: '4jX6gR4V8Ao',
     ingredients: [
-      { id: '1', name: 'Fresh Salmon fillet', amount: '200g', category: 'Meat', inStock: false },
-      { id: '2', name: 'Ripe Avocado', amount: '1/2', category: 'Produce', inStock: true },
-      { id: '3', name: 'Brown Rice', amount: '1 cup', category: 'Pantry', inStock: true },
+      { id: '1', name: 'Fresh Salmon fillet', amount: '200g', amountImperial: '7 oz', category: 'Meat', inStock: false },
+      { id: '2', name: 'Ripe Avocado', amount: '1/2', amountImperial: '1/2', category: 'Produce', inStock: true },
+      { id: '3', name: 'Brown Rice', amount: '200g', amountImperial: '1 cup', category: 'Pantry', inStock: true },
     ],
     steps: [
       { id: 1, title: 'Prepare the Salmon', description: 'Season with salt, pepper, and citrus juice.', timestamp: '0:45' },
@@ -31,14 +31,14 @@ export const RECIPES: Recipe[] = [
     level: 'Intermediate',
     tags: ['HEALTHY', 'MEDITERRANEAN'],
     featured: true,
-    youtubeVideoId: 'f0pL6Xp-Y7E', // Placeholder
+    youtubeVideoId: 'xnbnXgSQnnU',
     ingredients: [
-      { id: '101', name: 'Arborio Rice', amount: '300g', category: 'Pantry', inStock: true },
-      { id: '102', name: 'Saffron Threads', amount: '0.5g', category: 'Pantry', inStock: false },
-      { id: '103', name: 'Organic Vegetable Broth', amount: '1L', category: 'Pantry', inStock: false },
-      { id: '104', name: 'Fresh Sage Leaves', amount: '12', category: 'Produce', inStock: false },
-      { id: '105', name: 'Unsalted Butter', amount: '50g', category: 'Dairy', inStock: true },
-      { id: '106', name: 'Grated Parmesan', amount: '60g', category: 'Dairy', inStock: true },
+      { id: '101', name: 'Arborio Rice', amount: '300g', amountImperial: '1 1/2 cups', category: 'Pantry', inStock: true },
+      { id: '102', name: 'Saffron Threads', amount: '0.5g', amountImperial: 'pinch', category: 'Pantry', inStock: false },
+      { id: '103', name: 'Organic Vegetable Broth', amount: '1L', amountImperial: '4 cups', category: 'Pantry', inStock: false },
+      { id: '104', name: 'Fresh Sage Leaves', amount: '12 leaves', amountImperial: '12 leaves', category: 'Produce', inStock: false },
+      { id: '105', name: 'Unsalted Butter', amount: '50g', amountImperial: '3 1/2 tbsp', category: 'Dairy', inStock: true },
+      { id: '106', name: 'Grated Parmesan', amount: '60g', amountImperial: '1/2 cup', category: 'Dairy', inStock: true },
     ],
     steps: [
       { id: 1, title: 'Infuse the Saffron', description: 'Lightly toast the saffron threads in a small pan, then crumble them into 100ml of warm broth. Let it steep for at least 10 minutes to release the deep golden color.', timestamp: '0:45', imageUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuChoxnjV3xKSRO9Rkq9tRGA5bj8OAlbMFjaAwILIeaexV-kSLGso5Xgr8sjN4HaY20EIHujLyFNULR_T1UoLItj_lY2gLLvPEhgmqq4TQBRFEisqXjMzKPf-EprfoT0qpNC31vayhla1R1XfBZPAK0r_8Bts70sz9uLkhyadggxFi4wZXF8h1Un0uPDtydb7A0ExgP24bydc1Mq-ufIo42uBaM9_gpkSJuUPhY7onWxDWcyhp0fPfRHyw77NsNMF_BkSRRRKfqLgGg' },
@@ -56,10 +56,11 @@ export const RECIPES: Recipe[] = [
     calories: '450 KCAL',
     level: 'Easy',
     tags: ['QUICK', 'VEGGIE'],
+    youtubeVideoId: 'O2wz9OpsQu8',
     ingredients: [
-      { id: '201', name: 'Hummus', amount: '100g', category: 'Pantry', inStock: true },
-      { id: '202', name: 'Kalamata Olives', amount: '50g', category: 'Pantry', inStock: true },
-      { id: '203', name: 'Cherry Tomatoes', amount: '100g', category: 'Produce', inStock: false },
+      { id: '201', name: 'Hummus', amount: '100g', amountImperial: '1/2 cup', category: 'Pantry', inStock: true },
+      { id: '202', name: 'Kalamata Olives', amount: '50g', amountImperial: '1/4 cup', category: 'Pantry', inStock: true },
+      { id: '203', name: 'Cherry Tomatoes', amount: '100g', amountImperial: '3 1/2 oz', category: 'Produce', inStock: false },
     ],
     steps: [
       { id: 1, title: 'Assemble base', description: 'Add greens, hummus and olives to a bowl.', timestamp: '0:30' }
@@ -74,10 +75,11 @@ export const RECIPES: Recipe[] = [
     calories: '600 KCAL',
     level: 'Hard',
     tags: ['BAKING', 'ARTISAN'],
+    youtubeVideoId: 'atRoikyphAA',
     ingredients: [
-      { id: '301', name: 'Sourdough Starter', amount: '100g', category: 'Pantry', inStock: true },
-      { id: '302', name: 'Bread Flour', amount: '500g', category: 'Pantry', inStock: true },
-      { id: '303', name: 'Fresh Basil', amount: '1 bunch', category: 'Produce', inStock: false },
+      { id: '301', name: 'Sourdough Starter', amount: '100g', amountImperial: '1/2 cup', category: 'Pantry', inStock: true },
+      { id: '302', name: 'Bread Flour', amount: '500g', amountImperial: '4 cups', category: 'Pantry', inStock: true },
+      { id: '303', name: 'Fresh Basil', amount: '1 bunch', amountImperial: '1 bunch', category: 'Produce', inStock: false },
     ],
     steps: [
       { id: 1, title: 'Knead dough', description: 'Mix flour and water, then add starter.', timestamp: '1:00' }
